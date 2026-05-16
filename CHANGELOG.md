@@ -1,5 +1,50 @@
 # Changelog
 
+## [12.13.0] — 2026-05-16
+
+**Six new emitters + a public programmatic API.**
+
+Every extraction now writes five additional first-class files, and downstream
+tools can wire into the engine through a stable surface.
+
+- **Tailwind v4 (`<host>-tailwind-v4.css`)** — CSS-first `@theme {}` block
+  with the full HSL colour scales, neutrals, type, spacing, radii, shadows
+  and motion. Parallel to the v3 `tailwind.config.js`, so v4 users get a
+  drop-in file.
+- **TypeScript token types (`<host>-tokens.d.ts`)** — strict literal
+  unions for `ColorRole`, `ColorHex`, `FontFamilyToken`, `FontWeightToken`,
+  `SpacingToken`, `RadiusToken`, `DurationToken`, `EasingToken` plus a
+  `DesignTokens` roll-up interface. Component props typed against the real
+  extracted brand, not generic `string`.
+- **Brand-aware CSS reset (`<host>-reset.css`)** — modern reset wired to
+  the extracted background / foreground / links / accent / selection.
+  Honours `prefers-reduced-motion`.
+- **Gradients (`<host>-gradients.css` + `.json`)** — surfaces every
+  extracted gradient as `:root --grad-N` vars plus `.grad-N` background
+  and `.grad-text-N` background-clip utility classes.
+- **`--palette <n>` flag** — compresses noisy 60–200-colour extractions
+  to N perceptually-distinct tokens via weighted LAB-space k-means.
+  Returns cluster medoids — never invents a hex that wasn't on the page.
+  Verified: stripe.com 29 → 8.
+
+**Public programmatic API at `designlang/api`.**
+
+A frozen surface other packages, scripts and AI agents can import without
+reaching into internal modules.
+
+```js
+import { extract, render, renderAll, RENDERERS } from 'designlang/api';
+
+const design = await extract('https://stripe.com', { palette: 8 });
+const tailwind = render('tailwind-v4', design);
+const files = renderAll(design); // { 'stripe-com-tokens.d.ts': '...', ... }
+```
+
+`package.json` now exposes:
+- `designlang`         — main entry
+- `designlang/api`     — the new public API (19 renderer ids)
+- `designlang/mcp`     — the existing MCP server entry
+
 ## [12.12.0] — 2026-05-15
 
 **Website launch — designlang.app, fully rebuilt.**
