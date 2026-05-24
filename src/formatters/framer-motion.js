@@ -5,6 +5,11 @@
 // (fade, slide-up, scale-in, stagger). Framer Motion is the dominant
 // React animation library, so this is the highest-leverage motion
 // emitter for the React ecosystem.
+//
+// v12.16 — now also emits:
+//   • spring presets derived from detected overshoot beziers
+//   • whileInView variants when the source uses scroll/view-timeline
+//   • keyframe variants reconstructed from on-page @keyframes
 
 function bezier(raw) {
   if (!raw) return null;
@@ -21,10 +26,25 @@ function camel(s) {
   return String(s || '').replace(/[^a-zA-Z0-9]+(.)/g, (_, c) => c.toUpperCase()).replace(/^[0-9]/, '_$&');
 }
 
+// Rough inverse of a critically-damped second-order response.
+// Shorter durations → stiffer; deeper overshoot → less damping.
+// Same heuristic the Motion One emitter uses, kept in sync for parity.
+function springFromBezier(pts, ms) {
+  const [, y1, , y2] = pts;
+  const overshoot = Math.max(0, Math.max(y1 - 1, y2 - 1, -y1, -y2));
+  const seconds = Math.max(0.1, (ms || 400) / 1000);
+  const stiffness = Math.round(Math.min(700, Math.max(80, 600 / seconds)));
+  const damping = Math.round(Math.max(8, 30 - overshoot * 40));
+  return { stiffness, damping, mass: 1 };
+}
+
 export function formatFramerMotion(design) {
   const host = (() => { try { return new URL(design?.meta?.url).hostname.replace(/^www\./, ''); } catch { return 'site'; } })();
   const durations = Array.isArray(design?.motion?.durations) ? design.motion.durations : [];
   const easings   = Array.isArray(design?.motion?.easings)   ? design.motion.easings   : [];
+  const springs   = Array.isArray(design?.motion?.springs)   ? design.motion.springs   : [];
+  const keyframes = Array.isArray(design?.motion?.keyframes) ? design.motion.keyframes : [];
+  const scroll    = design?.motion?.scrollLinked || { present: false, signals: [] };
 
   // Pick a default duration (the most common "medium" feel) and easing.
   const durSec = (d) => ((d.ms || parseInt(d.css || d.value || d, 10) || 300) / 1000);
@@ -75,13 +95,33 @@ export function formatFramerMotion(design) {
   }
   lines.push('};', '');
 
+  // Spring presets — derived from detected overshoot beziers when present,
+  // else a single tasteful default so consumers can always reach for one.
+  const springEntries = [];
+  springs.forEach((s, i) => {
+    const pts = bezier(s.raw);
+    if (!pts) return;
+    springEntries.push({ key: i === 0 ? 'soft' : `spring${i + 1}`, opts: springFromBezier(pts, defaultDur * 1000) });
+  });
+  if (springEntries.length === 0) {
+    springEntries.push({ key: 'soft', opts: { stiffness: 320, damping: 30, mass: 1 } });
+  }
+  const primarySpringKey = springEntries[0].key;
+
+  lines.push('/** Spring presets — pass to a Framer Motion `transition` prop. */');
+  lines.push('export const springs = {');
+  for (const { key, opts } of springEntries) {
+    lines.push(`  ${key}: { type: 'spring', stiffness: ${opts.stiffness}, damping: ${opts.damping}, mass: ${opts.mass} },`);
+  }
+  lines.push('};', '');
+
   const primaryEaseKey = easeEntries[0].key;
   lines.push('/** Ready-to-spread Framer Motion transition objects. */');
   lines.push('export const transitions = {');
   lines.push(`  base:  { duration: ${defaultDur}, ease: easings.${primaryEaseKey} },`);
   lines.push(`  fast:  { duration: ${Math.max(0.1, defaultDur * 0.5).toFixed(3)}, ease: easings.${primaryEaseKey} },`);
   lines.push(`  slow:  { duration: ${(defaultDur * 1.8).toFixed(3)}, ease: easings.${primaryEaseKey} },`);
-  lines.push(`  spring: { type: 'spring', stiffness: 320, damping: 30 },`);
+  lines.push(`  spring: springs.${primarySpringKey},`);
   lines.push('};', '');
 
   lines.push('/** Common variants wired to the extracted timing. */');
@@ -98,12 +138,60 @@ export function formatFramerMotion(design) {
   lines.push('    hidden: { opacity: 0, scale: 0.96 },');
   lines.push('    show:   { opacity: 1, scale: 1, transition: transitions.base },');
   lines.push('  },');
+  lines.push('  pop: {');
+  lines.push('    hidden: { opacity: 0, scale: 0.9 },');
+  lines.push(`    show:   { opacity: 1, scale: 1, transition: springs.${primarySpringKey} },`);
+  lines.push('  },');
   lines.push('  stagger: {');
   lines.push('    hidden: {},');
   lines.push('    show:   { transition: { staggerChildren: ' + Math.max(0.04, defaultDur * 0.25).toFixed(3) + ' } },');
   lines.push('  },');
+
+  // Reconstructed keyframe variants — Framer Motion accepts arrays per
+  // property to produce keyframe animations. We use the camelCased
+  // @keyframes name so the source intent survives.
+  const usedKeyframes = keyframes.filter(k => k.used && k.steps && k.steps.length);
+  for (const kf of usedKeyframes.slice(0, 8)) {
+    const propMap = {};
+    for (const step of kf.steps) {
+      for (const part of (step.style || '').split(';')) {
+        const [p, v] = part.split(':').map(s => (s || '').trim());
+        if (!p || !v) continue;
+        (propMap[p] ||= []).push(v);
+      }
+    }
+    const entries = Object.entries(propMap)
+      .filter(([, vals]) => vals.length >= 2)
+      .map(([prop, vals]) => `      ${JSON.stringify(camel(prop))}: ${JSON.stringify(vals)}`);
+    if (!entries.length) continue;
+    lines.push(`  ${camel(kf.name)}: {`);
+    lines.push('    hidden: {},');
+    lines.push('    show: {');
+    lines.push(entries.join(',\n') + ',');
+    lines.push('      transition: transitions.base,');
+    lines.push('    },');
+    lines.push('  },');
+  }
+
   lines.push('};', '');
-  lines.push('export default { easings, durations, transitions, variants };');
+
+  if (scroll.present) {
+    lines.push('/** Site uses scroll- or view-timeline. Drop-in `whileInView` props. */');
+    lines.push('export const inView = {');
+    lines.push('  fadeIn: {');
+    lines.push('    initial: variants.fade.hidden,');
+    lines.push('    whileInView: variants.fade.show,');
+    lines.push('    viewport: { once: true, amount: 0.3 },');
+    lines.push('  },');
+    lines.push('  riseIn: {');
+    lines.push('    initial: variants.slideUp.hidden,');
+    lines.push('    whileInView: variants.slideUp.show,');
+    lines.push('    viewport: { once: true, amount: 0.3 },');
+    lines.push('  },');
+    lines.push('};', '');
+  }
+
+  lines.push(`export default { easings, durations, springs, transitions, variants${scroll.present ? ', inView' : ''} };`);
   lines.push('');
 
   return lines.join('\n');

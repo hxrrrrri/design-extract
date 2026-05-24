@@ -29,6 +29,7 @@ import { formatGradientsCss, formatGradientsJson } from '../src/formatters/gradi
 import { formatAgentPrompt } from '../src/formatters/agent-prompt.js';
 import { formatMotionLab } from '../src/formatters/motion-lab.js';
 import { formatFramerMotion } from '../src/formatters/framer-motion.js';
+import { formatMotionOne } from '../src/formatters/motion-one.js';
 import { formatCssVars } from '../src/formatters/css-vars.js';
 import { formatPreview } from '../src/formatters/preview.js';
 import { formatFigma } from '../src/formatters/figma.js';
@@ -355,6 +356,7 @@ program
         { name: `${prefix}-AGENT.md`,           content: formatAgentPrompt(design), label: 'Agent system prompt (paste into Claude/GPT/Cursor)' },
         { name: `${prefix}-motion.html`,        content: formatMotionLab(design),   label: 'Motion lab (interactive easing/duration/keyframe page)' },
         { name: `${prefix}-motion.framer.js`,   content: formatFramerMotion(design), label: 'Framer Motion presets (transitions + variants)' },
+        { name: `${prefix}-motion.one.js`,      content: formatMotionOne(design),    label: 'Motion One presets (animate() + springs + scroll)' },
         { name: `${prefix}-variables.css`, content: formatCssVars(design), label: 'CSS Variables' },
         { name: `${prefix}-preview.html`, content: formatPreview(design), label: 'Visual Preview' },
         { name: `${prefix}-figma-variables.json`, content: formatFigma(design), label: 'Figma Variables' },
